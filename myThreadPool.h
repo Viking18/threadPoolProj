@@ -25,10 +25,12 @@ private:
     MyWorkQueueNode* tail;
 
 public:
+    MyWorkQueue(int);
     int     init(int max);
     int     putWork(MyWorkQueueNode * node);
 //    int     removeWork();
     bool    isEmpty();
+    bool    isFull();
     MyWorkQueueNode*     getWork();
 };
 
@@ -37,14 +39,16 @@ class MyThreadPool
 private:
     int     maxThreadNum,coreThreadNum;
     int     currentThreadNum;
+    time_t *       timeWait;
     MyWorkQueue *   workQueue;
     pthread_t *     tidArray;
 
     pthread_cond_t  cond;
     pthread_mutex_t lock;
 public:
+    MyThreadPool(int ,int , time_t * ,MyWorkQueue * );
     static  void *  _workThread(void *arg);
-    int     init(int max, int core, int maxWork);
+    int     init();
     int     submit(void (*call)(void *), void * para);
 };
 

@@ -7,10 +7,18 @@
 #include <stdlib.h>
 #include "myThreadPool.h"
 
-#define DEBUG(i,j) printf("THREAD %d: %s\n",i,j)
+#define DEBUG(i,j) printf("THREAD %ld: %s\n",i,j)
 
+MyThreadPool::MyThreadPool(int max, int core, time_t * timespec1, MyWorkQueue *queue)
+{
+    this->maxThreadNum = max;
+    this->coreThreadNum = core;
+    this->workQueue = queue;
+    this->currentThreadNum = 0;
+    this->timeWait = timespec1;
+}
 
-int MyThreadPool::init(int max,int core,int maxWork)
+int MyThreadPool::init()
 {
     /*
      * 1. 根据max,core设置pool对象的属性值（高级设计，应该接收一个attr结构体，方便扩展）
@@ -18,8 +26,6 @@ int MyThreadPool::init(int max,int core,int maxWork)
      * 3. 创建核心数目的工作线程，将workQueue的地址传给他们
      */
     int iRet = 0;
-    this->maxThreadNum = max;
-    this->coreThreadNum = core;
     this->currentThreadNum = 0;
 
     //init mutex_t and cond_t
@@ -31,48 +37,40 @@ int MyThreadPool::init(int max,int core,int maxWork)
         return iRet;
     }
 
-    //init tidArray
-    if( (this->tidArray = (pthread_t *) malloc(sizeof(pthread_t) * this->maxThreadNum))== nullptr)
-    {
-        printf("ERROR: malloc tidArray error!");
-        iRet = -1;
-        return iRet;
-    }
-    for(int i=0;i < this->maxThreadNum; i++)
-    {
-        tidArray[i] = (pthread_t) -1;
-    }
-
-    //init workQueue
-    this->workQueue = (MyWorkQueue *) malloc(sizeof(MyWorkQueue));
-    if( (iRet = this->workQueue->init(maxWork))!=0)
-    {
-        printf("ERROR: init workQueue error;iRet:%d, maxWork:%d\n", iRet, maxWork);
-        free(this->tidArray);
-        return iRet;
-    }
-
-    //create core threads
-    while(this->currentThreadNum < this->coreThreadNum)
-    {
-        pthread_t tid;
-        if( (iRet = pthread_create(&tid, nullptr, _workThread ,this))!=0)
-        {
-            printf("ERROR: create thread error!");
-            //if failed,cancel thread
-            for(int i=0;i<this->maxThreadNum;i++)
-            {
-                if( this->tidArray[i] != (pthread_t) -1)
-                    pthread_cancel(this->tidArray[i]);
-            }
-            free(this->tidArray);
-            free(this->workQueue);
-            return iRet;
-        }
-
-        tidArray[this->currentThreadNum] = tid;
-        ++ this->currentThreadNum;
-    }
+//    //init tidArray
+//    if( (this->tidArray = (pthread_t *) malloc(sizeof(pthread_t) * this->maxThreadNum))== nullptr)
+//    {
+//        printf("ERROR: malloc tidArray error!\n");
+//        iRet = -1;
+//        return iRet;
+//    }
+//    for(int i=0;i < this->maxThreadNum; i++)
+//    {
+//        tidArray[i] = (pthread_t) -1;
+//    }
+//
+//
+//    //create core threads
+//    while(this->currentThreadNum < this->coreThreadNum)
+//    {
+//        pthread_t tid;
+//        if( (iRet = pthread_create(&tid, nullptr, _workThread ,this))!=0)
+//        {
+//            printf("ERROR: create thread error!\n");
+//            //if failed,cancel thread
+//            for(int i=0;i<this->maxThreadNum;i++)
+//            {
+//                if( this->tidArray[i] != (pthread_t) -1)
+//                    pthread_cancel(this->tidArray[i]);
+//            }
+//            free(this->tidArray);
+//            free(this->workQueue);
+//            return iRet;
+//        }
+//
+//        tidArray[this->currentThreadNum] = tid;
+//        ++ this->currentThreadNum;
+//    }
 
     return 0;
 }
@@ -92,8 +90,17 @@ void * MyThreadPool::_workThread(void *args)
         pthread_mutex_lock( &pool->lock);
         while(pool->workQueue->isEmpty())
         {
-            DEBUG(pthread_self(), "_workThread: waiting for work...");
-            pthread_cond_wait(&pool->cond, &pool->lock);
+            DEBUG((long)pthread_self()%177, "_workThread: waiting for work...");
+            timespec tmp;
+            tmp.tv_sec = time(nullptr) + *pool->timeWait;
+            pthread_cond_timedwait(&pool->cond, &pool->lock, &tmp);
+            if(time(nullptr) >= tmp.tv_sec) //超时，退出线程
+            {
+                DEBUG((long)pthread_self()%177, "time exceed. return!");
+                -- pool->currentThreadNum;
+                pthread_mutex_unlock( &pool->lock);
+                return nullptr;
+            }
         }
 
         node = pool->workQueue->getWork();
@@ -101,35 +108,18 @@ void * MyThreadPool::_workThread(void *args)
 
         if(node == nullptr)
         {
-            DEBUG(pthread_self(), "_workThread: get no work");
+            DEBUG((long)pthread_self()%177, "_workThread: get no work");
             continue;
         }
         else {
-            DEBUG(pthread_self(), "_workThread: start processing...");
+//            DEBUG((long)pthread_self()%177, "_workThread: start processing...");
             node->call(node->para);
             //TODO 对于返回结果的存储或处理
-            DEBUG(pthread_self(), "_workThread: job done.");
+            DEBUG((long)pthread_self()%177, "_workThread: job done.");
         }
     }
 }
 
-int MyWorkQueue::init(int max)
-{
-    MyWorkQueueNode * newNode =(MyWorkQueueNode *) malloc(sizeof(MyWorkQueueNode));
-    if(newNode == nullptr)
-    {
-        DEBUG(pthread_self(), "malloc MyWorkQueueNode failed!");
-        return -2;
-    }
-
-    newNode->next = nullptr;
-    this->head = newNode;
-    this->tail = newNode;
-    this->maxWorkNum = max;
-    this->currentWorkNum = 0;
-
-    return 0;
-}
 
 int MyThreadPool::submit(void (*call)(void *), void *para)
 {
@@ -143,7 +133,7 @@ int MyThreadPool::submit(void (*call)(void *), void *para)
     int iRet;
     if ( (newNode =(MyWorkQueueNode*) malloc(sizeof(MyWorkQueueNode)))== nullptr)
     {
-        DEBUG(pthread_self(), "submit: malloc new MyWorkQueueNode failed");
+        DEBUG((long)pthread_self()%177, "submit: malloc new MyWorkQueueNode failed");
         return -2;
     }
 
@@ -151,33 +141,70 @@ int MyThreadPool::submit(void (*call)(void *), void *para)
     newNode->para = para;
     newNode->next = nullptr;
 
-    pthread_mutex_lock( &this->lock);
-    iRet = this->workQueue->putWork(newNode);
-    pthread_mutex_unlock( &this->lock);
-    pthread_cond_signal( &cond);
-    if( iRet == 0)
+    //线程数量小于核心线程数量，直接创建线程
+    pthread_mutex_lock(&this->lock);
+    if(this->currentThreadNum < this->coreThreadNum)
     {
-        DEBUG(pthread_self(), "submit: put work success!");
-    }
-    else if(iRet == -1)
-    {
-        DEBUG(pthread_self(), "submit: too much work,refused!");
+        pthread_t tid;
+        if( (iRet = pthread_create( &tid, nullptr, _workThread, this)) != 0)
+        {
+            DEBUG((long)pthread_self()%177, "pthread_create failed");
+        }
+        else
+        {
+            printf("raise new thread %ld\n",(long)tid%177);
+            ++ this->currentThreadNum;
+        }
     }
 
-    return iRet;
+    //如果缓冲队列不满，直接放入队列
+    if(!this->workQueue->isFull())
+    {
+        this->workQueue->putWork(newNode);
+    }
+    else
+    {
+        //队列已满，检测是否达到最大线程数
+        if (this->currentThreadNum < this->maxThreadNum)
+        {
+            pthread_t tid;
+            if ((iRet = pthread_create(&tid, nullptr, _workThread, this)) != 0) {
+                DEBUG((long)pthread_self()%177, "pthread_create failed");
+            } else {
+                printf("raise new thread %ld\n", (long)tid%177);
+                ++this->currentThreadNum;
+            }
+            this->workQueue->putWork(newNode);
+        }
+        else
+        {
+            //队列已满，线程最大，返回失败
+            DEBUG((long)pthread_self()%177, "REJECTED! thread num max, work queue full.");
+            pthread_mutex_unlock( &this->lock);
+            return -1;
+        }
+    }
+    pthread_mutex_unlock( &this->lock);
+    pthread_cond_signal( &this->cond);
+    return 0;
 }
 
+MyWorkQueue::MyWorkQueue(int max)
+{
+    this->maxWorkNum = max;
+    MyWorkQueueNode * node = new MyWorkQueueNode();
+
+    this->head = node;
+    this->tail = node;
+    this->currentWorkNum = 0;
+
+}
 
 int MyWorkQueue::putWork(MyWorkQueueNode *node)
 {
     /*
      * return 0 success; -1 refused;
      */
-    if (this->currentWorkNum >= this->maxWorkNum)
-    {
-        DEBUG(pthread_self(), "putWork: workQueue full. Refused!");
-        return -1;
-    }
 
     this->tail->next = node;
     node->next = nullptr;
@@ -192,6 +219,11 @@ bool MyWorkQueue::isEmpty()
     return this->head==this->tail;
 }
 
+bool MyWorkQueue::isFull()
+{
+    return (this->currentWorkNum > this->maxWorkNum);
+}
+
 MyWorkQueueNode * MyWorkQueue::getWork()
 {
     if (this->isEmpty())
@@ -201,7 +233,7 @@ MyWorkQueueNode * MyWorkQueue::getWork()
     res = this->head->next;
     if(res == nullptr)
     {
-        DEBUG(pthread_self(), "ERROR: workQueue get failed. FATAL ERROR!");
+        DEBUG((long)pthread_self() % 177, "ERROR: workQueue get failed. FATAL ERROR!");
         return nullptr;
     }
 
@@ -215,3 +247,5 @@ MyWorkQueueNode * MyWorkQueue::getWork()
 
     return res;
 }
+
+

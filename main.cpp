@@ -4,10 +4,10 @@
 #include "myThreadPool.h"
 using namespace std;
 
-#define maxThread 4
+#define maxThread 8
 #define coreThread 4
 #define maxWork 10
-
+#define timeWait 10
 
 
 struct addPare
@@ -27,19 +27,16 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    MyThreadPool * pool = (MyThreadPool *) malloc(sizeof(MyThreadPool));
-    if(pool == nullptr)
-    {
-        printf("malloc MyThreadPool failed;");
-        return -1;
-    }
+    time_t time1 = timeWait;
+    MyWorkQueue * queue = new MyWorkQueue(maxWork);
+    MyThreadPool * pool = new MyThreadPool(maxThread, coreThread, &time1, queue);
 
-    if( (iRet = pool->init(maxThread, coreThread, maxWork))!=0)
+
+    if( (iRet = pool->init())!=0)
     {
         printf("pool->init failed;\n");
         return iRet;
     }
-
 
     int n = atoi(argv[1]);
     addPare pare[n];
@@ -51,11 +48,14 @@ int main(int argc, char *argv[]) {
         pool->submit(add,&pare[i]);
     }
 
-    for(int i=0;i<1000000;i++);
+
+//    for(int i=0;i<10000;i++);
     for(int i=0;i<n;i++)
     {
         printf("i:%d, job result: %d\n", i, pare[i].sum);
     }
+
+    while(1);
 
     return 0;
 
