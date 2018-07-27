@@ -39,6 +39,9 @@ int main(int argc, char *argv[]) {
     }
 
     int n = atoi(argv[1]);
+
+    printf("maxThread:%d,\tcoreThread:%d,\tmaxWork:%d,\ttimeWait:%ds,\tinputWorkNum:%d\n",maxThread,coreThread,maxWork,timeWait,n);
+
     addPare pare[n];
     for(int i=0;i<n;i++)
     {
